@@ -1,14 +1,19 @@
 package main
 
 import (
+	"bufio"
 	"encoding/hex"
 	"fmt"
+	"io/ioutil"
 	"math/big"
+	"net/http"
+	"os"
 	"strings"
 
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/urfave/cli"
 )
 
@@ -17,6 +22,8 @@ func main() {
 
 	app.Commands = []cli.Command{
 		mktx,
+		showTx,
+		pushTx,
 	}
 
 	app.RunAndExitOnError()
@@ -110,6 +117,83 @@ var mktx = cli.Command{
 	},
 }
 
+var showTx = cli.Command{
+	Name: "show",
+	Action: func(c *cli.Context) error {
+		if !c.Args().Present() {
+			return fmt.Errorf("must pass hex encoded transaction to parse")
+		}
+
+		hexval := c.Args().First()
+		if strings.HasPrefix(hexval, "0x") {
+			hexval = hexval[2:]
+		}
+
+		v, err := hex.DecodeString(hexval)
+		if err != nil {
+			return err
+		}
+
+		var tx types.Transaction
+		if err := rlp.DecodeBytes(v, &tx); err != nil {
+			return err
+		}
+
+		fmt.Println(tx.String())
+		return nil
+	},
+}
+
+var pushTx = cli.Command{
+	Name: "push",
+	Action: func(c *cli.Context) error {
+		if !c.Args().Present() {
+			return fmt.Errorf("must pass hex encoded transaction to parse")
+		}
+
+		hexval := c.Args().First()
+		if strings.HasPrefix(hexval, "0x") {
+			hexval = hexval[2:]
+		}
+
+		v, err := hex.DecodeString(hexval)
+		if err != nil {
+			return err
+		}
+
+		var tx types.Transaction
+		if err := rlp.DecodeBytes(v, &tx); err != nil {
+			return err
+		}
+
+		fmt.Println("your transaction:")
+		fmt.Println(tx.String())
+		if !yesNoPrompt("submit?", false) {
+			return nil
+		}
+
+		return postTx(hexval)
+	},
+}
+
+func postTx(hex string) error {
+	url := "https://api.etherscan.io/api?module=proxy&action=eth_sendRawTransaction&hex=" + hex
+	resp, err := http.Post(url, "", nil)
+	if err != nil {
+		return err
+	}
+
+	defer resp.Body.Close()
+
+	data, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println(string(data))
+	return nil
+}
+
 func Parse(val string) (*big.Int, error) {
 	denom, ok := big.NewInt(0).SetString("1000000000000000000", 10)
 	if !ok {
@@ -145,4 +229,29 @@ func Parse(val string) (*big.Int, error) {
 	value = value.Div(value, dec)
 
 	return value, nil
+}
+
+func yesNoPrompt(prompt string, def bool) bool {
+	opts := "[y/N]"
+	if def {
+		opts = "[Y/n]"
+	}
+
+	fmt.Printf("%s %s ", prompt, opts)
+	scan := bufio.NewScanner(os.Stdin)
+	for scan.Scan() {
+		val := strings.ToLower(scan.Text())
+		switch val {
+		case "":
+			return def
+		case "y":
+			return true
+		case "n":
+			return false
+		default:
+			fmt.Println("please type 'y' or 'n'")
+		}
+	}
+
+	panic("unexpected termination of stdin")
 }
